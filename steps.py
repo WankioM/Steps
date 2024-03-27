@@ -1,5 +1,8 @@
-
-#nexton:
+"""
+TO DO:
+    1. Make sure when someone exports , they are told  it can only be exported as admin
+    2. Make sure "Export actually works
+    """
 
 
 import bpy
@@ -22,6 +25,7 @@ translation= False
 initial_mat= None
 mat_change=False
 slot_ids={}
+initial_mods={}
 
 def get_starting_loc():
     global starting_location
@@ -281,25 +285,104 @@ def get_mat_command(current_mat, initial_mat):
 def apply_mat_command(slot_ids):
     
     global mat_change
+    print(f"Slots id  {slot_ids}")
     
     if mat_change:
    
         command = ""
         for slot_id, (current_material, initial_material) in slot_ids.items():
-            if slot_id < len(bpy.context.object.material_slots):
-                command += (
-                    f"bpy.context.object.material_slots[{slot_id}].material = bpy.data.materials['{current_material.name}']\n"
-                )
+            print(f"Current material {current_material}")
+            #if the change wwe made was to remove all material slots
+            if current_material == None:
+                command+=(
+                f"bpy.context.object.active_material_index={slot_id}\n"
+                f"bpy.ops.object.material_slot_remove()")
+                
             else:
-                command += (
-                    f"bpy.ops.object.material_slot_add()\n"
-                    f"bpy.context.object.material_slots[-1].material = bpy.data.materials['{current_material.name}']\n"
-                )
+                if slot_id < len(bpy.context.object.material_slots):
+                    command += (
+                        f"bpy.context.object.material_slots[{slot_id}].material = bpy.data.materials['{current_material.name}']\n"
+                    )
+                else:
+                    command += (
+                        f"bpy.ops.object.material_slot_add()\n"
+                        f"bpy.context.object.material_slots[-1].material = bpy.data.materials['{current_material.name}']\n"
+                    )
             
        
         
         global steps
         steps.append(command)
+        
+def get_mod_props():
+    mod_props = {}  # Assuming mod_props is a dictionary declared somewhere
+
+    obj = bpy.context.active_object
+
+    for modifier in bpy.context.object.modifiers:
+        print("Modifier Name:", modifier.name)
+        allprops = dir(bpy.context.object.modifiers[modifier.name])
+        moddict = {}
+
+        for prop in allprops:
+            value = getattr(obj.modifiers[modifier.name], prop, None)
+            print(prop, value)
+            moddict[prop] = value
+
+        mod_props[modifier.name] = moddict
+        print('-----------------------------------')
+
+    print(f'Modprops dict {mod_props}')
+    return mod_props
+
+
+
+def compare_dicts(a, b):
+    
+    global steps
+
+    for key in b.keys():
+      print (f"Modifier {key}")
+      if key not in a :
+        print(f"Modifier {key} has been added")
+        
+        #get the command to apply the key with all its subvalues
+        mod=bpy.context.object.modifiers[key].type
+        
+    
+       
+        command=(f"bpy.ops.object.modifier_add(type='{mod}')")
+        steps.append(command)
+        for prop in (b[key]).keys():
+            if prop not in ["__doc__","name", "rna_type","type", "is_override_data", "__module__", "__slots__", "bl_rna", "damping_time", "execution_time"]:
+                value_str = f"'{b[key][prop]}'" if isinstance(b[key][prop], str) else b[key][prop]
+                command = f"bpy.context.object.modifiers['{key}'].{prop} = {value_str}"
+                steps.append(command)
+
+        
+      
+
+
+
+        if key in a:
+          print (b[key])
+          
+          for prop in (b[key]).keys():
+            
+            if b[key][prop] != a[key][prop]:
+              print(f"Modifier {key} value {prop} changed from {a[key][prop]} to {b[key][prop]}")
+
+
+
+        #check if a modifier has been removed
+    for key in a .keys():  
+        if key not in b:
+            print(f"Modifier {key} has been removed")
+    
+            command = f"bpy.ops.object.modifier_remove(modifier='{key}')"
+            steps.append(command)
+
+
     
     
 
@@ -307,8 +390,10 @@ class StartOperator(bpy.types.Operator):
     bl_idname = "myaddon.start"
     bl_label = "Start Recording"
     
+    recording = bpy.props.BoolProperty(default=False)
+    
     def execute(self, context):
-        
+        context.scene.myaddon_start.recording = True 
         global steps
         
         # Clear the steps list before starting a new recording
@@ -330,6 +415,8 @@ class StartOperator(bpy.types.Operator):
         if obj and obj.type == 'MESH':
             initial_mat=obj.data.materials[:]
             print (initial_mat)
+            global initial_mods
+            initial_mods=get_mod_props()
         
 
         
@@ -344,8 +431,8 @@ class StopOperator(bpy.types.Operator):
     
     
     def execute(self, context):
-        # Your custom operator logic goes here
-        # This function will be called when the operator is invoked
+        
+        context.scene.myaddon_start.recording = False
         
         global translation
         global steps
@@ -396,6 +483,16 @@ class StopOperator(bpy.types.Operator):
             current_mat=obj.data.materials[:]
             if current_mat != initial_mat:
                 get_mat_command(current_mat, initial_mat)
+                
+                
+            #check if modifiers have changed
+            global initial_mods
+            current_mods=get_mod_props()
+            if current_mods == initial_mods:
+                print (f"MODS STAYED THE SAME")
+            else:
+                compare_dicts(initial_mods, current_mods)
+                
         
         
         
@@ -431,9 +528,16 @@ class ExportOperator(bpy.types.Operator):
     bl_label = "Export"
     
     def execute(self, context):
-        # Your custom operator logic goes here
-        # This function will be called when the operator is invoked
-        print("Custom start operator executed!")
+        global steps
+       
+        filepath = "saved_steps.py" 
+        
+        # Open the file in write mode
+        with open(filepath, "w") as file:
+            # Write each step from the 'steps' variable to the file
+            for step in steps:
+                file.write(step + "\n")  # Write each step followed by a newline
+        print("Custom export operator executed!")
         return {'FINISHED'}
 
 class StepsTracker(bpy.types.Panel):
